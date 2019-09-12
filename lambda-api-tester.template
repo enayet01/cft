@@ -1,0 +1,139 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+
+  "Metadata" : {
+    "LICENSE" : "MIT-0"
+  },
+
+  "Description": "Template to launch a Lambda function to test a private API",
+
+  "Parameters" : {
+
+    "VPCEndpointDNSName": {
+      "Type" : "String",
+      "Default" : "xxxxx.execute-api.REGION.vpce.amazonaws.com",
+      "Description" : "DNS Name of your VPC Endpoint."
+    },
+
+    "APIGWEndpointDNSName": {
+      "Type" : "String",
+      "Default" : "xxxxxx.execute-api.REGION.amazonaws.com",
+      "Description" : "DNS name of your API Gateway Endpoint."
+    },
+
+    "Environment": {
+      "Type" : "String",
+      "Default" : "Demo",
+      "AllowedValues" : ["Demo", "Dev", "Mgmt", "Prod"],
+      "Description" : "Same environment as VPC stack."
+    }
+  },
+
+  "Metadata" : {
+  "AWS::CloudFormation::Interface" : {
+    "ParameterGroups" : [
+      {
+        "Label" : { "default" : "Function Configuration" },
+        "Parameters" : [ "VPCEndpointDNSName", "APIGWEndpointDNSName", "Environment" ]
+      }
+      ],
+      "ParameterLabels" : {
+        "VPCEndpointDNSName" : { "default" : "A private DNS name from your VPC Endpoint" },
+        "APIGWEndpointDNSName" : { "default" : "The endpoint DNS for your API Gateway API without path at the end" }
+      }
+    }
+  },
+
+  "Resources": {
+    "APITesterFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Runtime": "nodejs8.10",
+        "Timeout": 35,
+        "Handler": "index.handler",
+        "Code": {
+          "ZipFile" : { "Fn::Join" : ["\n", [
+            "var https = require('https');",
+            "const options = {",
+            "  host: process.env.VPCE_DNS_NAME,",
+            "  port: 443,",
+            "  path: '/demo/pets',",
+            "  method: 'GET',",
+            "  headers: {",
+            "    'Host':process.env.API_GW_ENDPOINT",
+            "  }",
+            "};",
+            "exports.handler = (event, context, callback) => {",
+            "    https.request(options, (res) => {",
+            "      console.log('statusCode:', res.statusCode);",
+            "      console.log('headers:', res.headers);",
+            "      let data = '';",
+            "      res.on('data', (d) => {",
+            "       data += d;",
+            "        process.stdout.write(d);",
+            "      });",
+            "      res.on('end', () => {",
+            "         callback(null, JSON.parse(data));",
+            "      });",
+            "    }).on('error', (e) => {",
+            "      console.error(e);",
+            "      callback(null, e);",
+            "    }).end();",
+            "};"
+          ]]}
+        },
+        "Environment": {
+          "Variables": {
+            "VPCE_DNS_NAME": {"Ref" : "VPCEndpointDNSName"},
+            "API_GW_ENDPOINT": {"Ref" : "APIGWEndpointDNSName"}
+          }
+        },
+        "Role": {
+          "Fn::GetAtt": ["APITesterFunctionRole","Arn"]
+        },
+        "VpcConfig" : {
+          "SecurityGroupIds" : [{"Ref" : "APITesterSG"}] ,
+          "SubnetIds" : [ {"Fn::ImportValue" : { "Fn::Join": [ "", [{"Ref" : "Environment"}, "-privateSubnet01" ]]}}, {"Fn::ImportValue" : { "Fn::Join": [ "", [{"Ref" : "Environment"}, "-privateSubnet02" ]]}}]
+        },
+        "Tags" : [
+          {"Key" : "Environment", "Value" : {"Ref" : "Environment"} },
+          {"Key" : "Name", "Value" : "APITesterFunction" }
+        ]
+      }
+    },
+
+    "APITesterFunctionRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": ["sts:AssumeRole"],
+              "Effect": "Allow",
+              "Principal": {
+                "Service": ["lambda.amazonaws.com"]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": ["arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+
+    "APITesterSG" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "VpcId" : {"Fn::ImportValue" : { "Fn::Join": [ "", [{"Ref" : "Environment"}, "-MyVPC" ]]}},
+        "GroupDescription" : "SG for Lambda function",
+        "SecurityGroupEgress" : [
+          { "IpProtocol" : "tcp", "FromPort" : "0",  "ToPort" : "65535",  "CidrIp" : "0.0.0.0/0" }
+        ],
+        "Tags" : [
+          {"Key" : "Environment", "Value" : {"Ref" : "Environment"} },
+          {"Key" : "Name", "Value" : "APITesterSG" }
+        ]
+      }
+    }
+  }
+}
